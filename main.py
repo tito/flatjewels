@@ -1,30 +1,37 @@
 __version__ = '0.1'
 
-import shelve
+import json
 from os.path import exists, join
 from kivy.app import App
 from kivy.uix.widget import Widget
 from kivy.lang import Builder
 from kivy.properties import NumericProperty, ListProperty, ObjectProperty, \
-        BooleanProperty
+        BooleanProperty, DictProperty
 from kivy.utils import get_color_from_hex, boundary
 from kivy.uix.floatlayout import FloatLayout
 from kivy.clock import Clock
 from kivy.animation import Animation
 from kivy.uix.stencilview import StencilView
 from kivy.uix.screenmanager import Screen, ScreenManager, SlideTransition
+from kivy.core.image import Image as CoreImage
+from kivy.uix.label import Label
+from kivy.metrics import sp
 from functools import partial
 from random import randint, random
+from math import sin
 from time import time
 
 SIZE = 8
 LEVEL_TIME = 60
-PERCENT_TIMED_JEWEL = 15 / 100.
 
-# 15 -> 12 -> 9.6 -> 7.6 -> 6.4 -> 4.9 ...
+# Percentage of timed jewel to generate
+PERCENT_TIMED_JEWEL = 10 / 100.
+# Decrease of the percentage after each level
 DECREASE_TIMED_JEWEL = 0.8
+# Percentage of big timed jewel to generate (10 instead of 5)
+PERCENT_BIGTIME_JEWEL = 20 / 100.
 
-COLORS = map(get_color_from_hex, (
+COLORS = [get_color_from_hex(x) for x in (
     '#95a5a6', # white
     '#c0392b', # red
     '#d35400', # orange
@@ -32,54 +39,53 @@ COLORS = map(get_color_from_hex, (
     '#f1c40f', # yellow
     '#3498db', # blue
     '#2ecc71', # green
-    ))
+    )]
 
 
 Builder.load_string('''
 <Label>:
     font_name: 'data/coolvetica rg.ttf'
 
+<ScoreLabel>:
+    font_size: '30sp'
+    size_hint: None, None
+    center: self.origin[0], self.origin[1] + self.dy
+
 <Jewel>:
     canvas:
-        Color:
-            rgba: 236 / 255., 240 / 255., 241 / 255., int(self.selected)
-        Rectangle:
-            pos: self.pos
-            size: self.size
         Color:
             rgb: root.color
         Rectangle:
             pos: self.x + 5, self.y + 5
             size: self.width - 10, self.height - 10
+            texture: app.textures['gem_selected' if self.selected else 'gem']
 
 <AreaBombJewel>:
-    Label:
-        pos: root.pos
-        size: root.size
-        text: 'x'
-        font_size: self.height / 2
-
-<LineBombJewel>:
-    Label:
-        pos: root.pos
-        size: root.size
-        text: '|'
-        font_size: self.height / 2
-
-<TimedJewel>:
-    Label:
-        pos: root.pos
-        size: root.size
-        text: '{}'.format(root.time)
-        font_size: self.height / 2
-
-<Board>:
     canvas:
         Color:
-            rgb: .1, .1, .1
+            rgb: 1, 1, 1
         Rectangle:
-            pos: self.pos
-            size: self.size
+            pos: self.x + 5, self.y + 5
+            size: self.width - 10, self.height - 10
+            texture: app.textures['tarea']
+
+<LineBombJewel>:
+    canvas:
+        Color:
+            rgb: 1, 1, 1
+        Rectangle:
+            pos: self.x + 5, self.y + 5
+            size: self.width - 10, self.height - 10
+            texture: app.textures['tline']
+
+<TimedJewel>:
+    canvas:
+        Color:
+            rgb: 1, 1, 1
+        Rectangle:
+            pos: self.x + 5, self.y + 5
+            size: self.width - 10, self.height - 10
+            texture: app.textures['t{}'.format(self.time)]
 
 <-SmoothLabel@Label>:
     font_name: 'data/coolvetica rg.ttf'
@@ -94,30 +100,21 @@ Builder.load_string('''
 <Timer@Widget>:
     canvas:
         Color:
-            rgb: .2, .3, .4
+            hsv: app.background_hsv[:1] + [.6, .6]
         Rectangle:
             pos: self.pos
             size: self.size
         Color:
-            rgb: .8, .8, .9
+            rgb: 1, 1 - app.sidebar_warning_color[-1], 1 - app.sidebar_warning_color[-1]
         Rectangle:
-            pos: self.x + dp(4), self.y + dp(4)
-            size: sp(50) + (self.width - dp(8) - sp(50)) * app.timer / 60., self.height - dp(8)
+            pos: self.x, self.y + self.height / 2.
+            size: self.width * app.timer / 60., self.height / 2.
+        Color:
+            rgb: .6, .6, .6
+        Rectangle:
+            pos: self.x, self.y
+            size: self.width * app.timer_next / 60., self.height / 2.
 
-    SmoothLabel:
-        id: sl
-        text: '{}s'.format(int(app.timer))
-        font_size: self.height / 1.2
-        center_y: root.center_y
-        right: root.x + sp(50) + dp(4) + ((root.width - dp(8) - sp(50)) * app.timer / 60.)
-        width: '50sp'
-        height: root.height - dp(8)
-        canvas.before:
-            Color:
-                rgb: .7, .62, .69
-            Rectangle:
-                pos: self.pos
-                size: self.size
         
 
 <GameOver>:
@@ -151,67 +148,95 @@ Builder.load_string('''
             size_hint_y: .25
 
 <Sidebar@BoxLayout>:
+    orientation: 'horizontal'
     canvas:
         Color:
-            rgb: .2, .3, .4
+            rgba: app.sidebar_warning_color
         Rectangle:
             pos: self.pos
-            size: self.width, self.height * app.timer_next / 60.
-            
-    Label:
-        text: 'Score'
-        font_size: '40dp'
-
+            size: self.size
     Label:
         text: '{}'.format(app.score)
-        font_size: '40dp'
-
-    Widget
-
-    Label:
-        text: 'Multiplier'
-        font_size: '40dp'
+        font_size: '30dp'
 
     Label:
         text: '{}x'.format(app.score_multiplier)
-        font_size: '40dp'
-
-    Widget
-
-    Label:
-        text: 'Combo'
-        font_size: '40dp'
+        font_size: '30dp'
 
     Label:
         text: '{}'.format(app.score_combo)
-        font_size: '40dp'
+        font_size: '30dp'
+
+
 
 <JewelUI>:
     canvas:
         Color:
-            rgb: .1, .1, .1
+            hsv: app.background_hsv
+            a: .08
         Rectangle:
             size: self.size
+        PushMatrix
+        Rotate:
+            origin: self.width / 2., self.height / 2.
+            angle: app.time * 4
+            axis: 0, 0, 1
+        Rectangle:
+            pos: (self.width / 2.) - 256, (self.height / 2.) - 256
+            size: 512, 512
+            texture: app.textures['star']
+        Rotate:
+            origin: self.center
+            angle: -app.time * 5
+            axis: 0, 0, 1
+        Rectangle:
+            pos: (self.width / 2.) - 384, (self.height / 2.) - 384
+            size: 768, 768
+            texture: app.textures['star']
+        Rotate:
+            origin: self.center
+            angle: app.time * 5
+            axis: 0, 0, 1
+        Rectangle:
+            pos: (self.width / 2.) - 512, (self.height / 2.) - 512
+            size: 1024, 1024
+            texture: app.textures['star']
+        Rotate:
+            origin: self.center
+            angle: -app.time * 6
+            axis: 0, 0, 1
+        Rectangle:
+            pos: (self.width / 2.) - 640, (self.height / 2.) - 640
+            size: 1280, 1280
+            texture: app.textures['star']
+        Rotate:
+            origin: self.center
+            angle: app.time * 6
+            axis: 0, 0, 1
+        Rectangle:
+            pos: (self.width / 2.) - 768, (self.height / 2.) - 768
+            size: 1536, 1536
+            texture: app.textures['star']
+        PopMatrix
+
 
     BoxLayout:
+        orientation: 'vertical'
+        padding: '0dp', '5dp'
+        spacing: '5dp'
 
         Sidebar:
-            orientation: 'vertical'
-            size_hint_x: None
-            width: '200dp'
+            size_hint_y: None
+            height: '50sp'
 
+        Timer:
+            size_hint_y: None
+            height: '8sp'
+            pos_hint: {'center_x': .5}
 
-        BoxLayout:
-            orientation: 'vertical'
-            padding: '0dp', '5dp'
-            Timer:
-                size_hint: None, None
-                width: board.width
-                height: '28dp'
-                pos_hint: {'center_x': .5}
-            SquareLayout:
-                Board:
-                    id: board
+        SquareLayout:
+            Board:
+                id: board
 ''')
 
 
@@ -225,7 +250,7 @@ class Jewel(Widget):
     animating = BooleanProperty(False)
     anim = ObjectProperty(None, allownone=True)
 
-    def animate_to(self, x, y, d=0):
+    def animate_to(self, x, y, d=0, x2=None, y2=None):
         self.animating = True
         if self.anim:
             self.anim.cancel(self)
@@ -237,6 +262,8 @@ class Jewel(Widget):
         duration = .20
 
         anim = Animation(pos=(x, y), d=duration, t='out_sine')
+        if x2 is not None:
+            anim = anim + Animation(pos=(x2, y2), d=duration, t='out_sine')
         if d:
             anim = Animation(d=d) + anim
         anim.bind(on_complete=self.on_complete)
@@ -267,11 +294,12 @@ class TimedJewel(Jewel):
     time = NumericProperty(0)
 
     def __init__(self, **kwargs):
-        self.time = [5, 10][randint(0, 1)]
+        self.time = 10 if random() < PERCENT_BIGTIME_JEWEL else 5
         super(TimedJewel, self).__init__(**kwargs)
 
     def explode(self, *args):
-        self.board.app.timer_next += self.time
+        self.board.app.timer_next = min(
+            LEVEL_TIME, self.time + self.board.app.timer_next)
         super(TimedJewel, self).explode(*args)
 
 
@@ -288,7 +316,7 @@ class AreaBombJewel(Jewel):
                 jewels.append(jewel)
         if jewels:
             self.board.bam(jewels, alltogether=True)
-            self.board.app.add_score('area', 1 + len(jewels))
+            self.board.app.add_score(ix, iy, 'area', 1 + len(jewels))
 
 class LineBombJewel(Jewel):
     def explode(self, *args):
@@ -309,7 +337,7 @@ class LineBombJewel(Jewel):
 
         if jewels:
             self.board.bam(jewels, alltogether=True)
-            self.board.app.add_score('line', 1 + len(jewels))
+            self.board.app.add_score(ix, iy, 'line', 1 + len(jewels))
 
 
 class SquareLayout(FloatLayout):
@@ -343,6 +371,8 @@ class Board(StencilView):
         self.bind(pos=self.do_layout, size=self.do_layout)
 
     def do_layout(self, *args):
+        if self.first_fill:
+            return
         js = self.jewel_size
         for ix in range(SIZE):
             for iy in range(SIZE):
@@ -482,10 +512,43 @@ class Board(StencilView):
         jewel1.ix, jewel1.iy = ix2, iy2
         jewel2.ix, jewel2.iy = ix1, iy1
 
-        jewel1.animate_to(*self.index_to_pos(ix2, iy2))
-        jewel2.animate_to(*self.index_to_pos(ix1, iy1))
+        # do we have a combo anywhere ?
+        h1 = self.have_combo(jewel1)
+        h2 = self.have_combo(jewel2)
 
-    def check(self, jewel):
+        # no combo ? cancel the movement
+        if not (h1 or h2):
+            self.board[ix1][iy1] = jewel1
+            self.board[ix2][iy2] = jewel2
+            jewel1.ix, jewel1.iy = ix1, iy1
+            jewel2.ix, jewel2.iy = ix2, iy2
+
+            # back and forth animation
+            x1, y1 = self.index_to_pos(ix1, iy1)
+            x2, y2 = self.index_to_pos(ix2, iy2)
+            jewel1.animate_to(x2, y2, x2=x1, y2=y1)
+            jewel2.animate_to(x1, y1, x2=x2, y2=y2)
+
+        else:
+            jewel1.animate_to(*self.index_to_pos(ix2, iy2))
+            jewel2.animate_to(*self.index_to_pos(ix1, iy1))
+
+
+    def have_combo(self, jewel):
+        sel_all, sel_x, sel_y = self.extract_combo(jewel)
+        # counting
+        l_all = len(sel_all)
+        l_x = len(sel_x)
+        l_y = len(sel_y)
+
+        if l_all < 2:
+            return
+        if l_x < 2 and l_y < 2:
+            return
+        return True
+
+
+    def extract_combo(self, jewel):
         sel_all = []
         sel_x = []
         sel_y = []
@@ -493,33 +556,39 @@ class Board(StencilView):
         index = jewel.index
         ix, iy = jewel.ix, jewel.iy
 
-        for x in xrange(ix - 1, -1, -1):
+        for x in range(ix - 1, -1, -1):
             j = board[x][iy]
             if not j or j.index != index or j.animating:
                 break
             sel_all.append(j)
             sel_x.append(j)
 
-        for x in xrange(ix + 1, SIZE):
+        for x in range(ix + 1, SIZE):
             j = board[x][iy]
             if not j or j.index != index or j.animating:
                 break
             sel_all.append(j)
             sel_x.append(j)
 
-        for y in xrange(iy - 1, -1, -1):
+        for y in range(iy - 1, -1, -1):
             j = board[ix][y]
             if not j or j.index != index or j.animating:
                 break
             sel_all.append(j)
             sel_y.append(j)
 
-        for y in xrange(iy + 1, SIZE):
+        for y in range(iy + 1, SIZE):
             j = board[ix][y]
             if not j or j.index != index or j.animating:
                 break
             sel_all.append(j)
             sel_y.append(j)
+
+        return sel_all, sel_x, sel_y
+
+    def check(self, jewel):
+        sel_all, sel_x, sel_y = self.extract_combo(jewel)
+        ix, iy = jewel.ix, jewel.iy
 
         # counting
         l_all = len(sel_all)
@@ -558,7 +627,7 @@ class Board(StencilView):
                 score_pattern = '4j'
                 self.generate_at(ix, iy, index=jewel.index, cls=LineBombJewel)
 
-        self.app.add_score(score_pattern, score_count)
+        self.app.add_score(ix, iy, score_pattern, score_count)
 
 
     def bam(self, jewels, alltogether=False):
@@ -629,7 +698,7 @@ class Board(StencilView):
             board[ix][iy] = jewel
             iy += 1
 
-        for iy in xrange(iy, SIZE):
+        for iy in range(iy, SIZE):
             jewel = self.generate()
             jewel.ix = ix
             jewel.iy = iy
@@ -648,6 +717,14 @@ class JewelUI(Screen):
     pass
 
 
+class ScoreLabel(Label):
+    dy = NumericProperty(0)
+    origin = ListProperty([0, 0])
+    def __init__(self, **kwargs):
+        super(ScoreLabel, self).__init__(**kwargs)
+        Animation(dy=sp(50), opacity=0., d=.5).start(self)
+
+
 class JewelApp(App):
     score = NumericProperty(0)
 
@@ -657,15 +734,33 @@ class JewelApp(App):
 
     timer = NumericProperty(LEVEL_TIME)
 
+    level_time = NumericProperty(LEVEL_TIME)
+
     timer_next = NumericProperty(0)
 
     no_touch = BooleanProperty(False)
 
     highscores = ListProperty([0, 0, 0])
 
+    background_hsv = ListProperty([137 / 255., 244 / 255., 1.])
+
+    background_angle = NumericProperty(0)
+
+    sidebar_warning_color = ListProperty([0, 0, 0, 0])
+
+    time = NumericProperty(0)
+
+    textures = DictProperty()
+
     def build(self):
         self.highscore_fn = join(self.user_data_dir, 'highscore.dat')
         self.root = ScreenManager(transition=SlideTransition())
+
+        # load textures
+        for fn in ('gem', 'gem_selected', 't5', 't10', 'tarea', 'tline', 'star'):
+            texture = CoreImage(join('data', '{}.png'.format(fn)), mipmap=True).texture
+            self.textures[fn] = texture
+
         self.bind(score_combo=self.check_game_over,
                 timer=self.check_game_over,
                 timer_next=self.check_game_over)
@@ -676,24 +771,26 @@ class JewelApp(App):
         # load highscores
         if not exists(self.highscore_fn):
             return
-        d = shelve.open(self.highscore_fn)
-        self.highscores = d['scores'][:3]
-        d.close()
+        try:
+            with open(self.highscore_fn) as fd:
+                self.highscores = json.load(fd)
+        except:
+            pass
 
     def save_highscore(self):
         highscores = self.highscores + [self.score]
         highscores.sort()
         highscores = list(reversed(highscores))[:3]
         self.highscores = highscores
-        d = shelve.open(self.highscore_fn)
-        d['scores'] = highscores
-        d.close()
+        with open(self.highscore_fn, 'w') as fd:
+            json.dump(self.highscores, fd)
 
     def start(self):
         self.score = 0
         self.score_combo = 0
         self.score_multiplier = 1
         self.timer = LEVEL_TIME
+        self.level_time = LEVEL_TIME
         self.start_time = time()
         self.no_touch = False
 
@@ -717,7 +814,18 @@ class JewelApp(App):
             self.root.current = 'gameover'
 
     def update_timer(self, dt):
-        self.timer = LEVEL_TIME - (time() - self.start_time)
+        self.timer = self.level_time - (time() - self.start_time)
+        self.time += dt
+
+        t = self.timer + self.timer_next
+        if t < 10:
+            a = abs(sin(self.time * 3))
+            self.sidebar_warning_color = [1, .1, .1,
+                    ((10. - t) / 10.) * .3 + a * .5]
+        else:
+            self.sidebar_warning_color = [0, 0, 0, 0]
+
+
         if self.timer > 0:
             return
 
@@ -727,13 +835,16 @@ class JewelApp(App):
 
         # next level!
         self.score_multiplier += 1
-        self.timer = min(LEVEL_TIME, self.timer_next)
         self.start_time = time()
+        self.level_time = self.timer_next
+        self.timer = self.level_time - (time() - self.start_time)
         self.timer_next = 0
         self.board.levelup()
 
 
-    def add_score(self, pattern, count):
+    def add_score(self, ix, iy, pattern, count):
+        x, y = self.board.index_to_pos(ix, iy)
+
         m = self.score_multiplier
         score = 0
         if pattern == 'classic':
@@ -750,6 +861,14 @@ class JewelApp(App):
             score += count * 1000
 
         score *= (1 + self.score_combo)
-        self.score += score * m
+        score *= m
+        self.score += score
+
+        if score == 0:
+            return
+
+        js = self.board.jewel_size
+        self.ui_jewel.add_widget(ScoreLabel(text='{}'.format(score),
+            origin=(x + js / 2, y + js / 2)))
 
 JewelApp().run()
