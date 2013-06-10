@@ -10,7 +10,7 @@ not.
 
 '''
 
-__version__ = '0.2'
+__version__ = '0.2.2'
 
 import json
 from os.path import exists, join
@@ -28,6 +28,7 @@ from kivy.uix.screenmanager import Screen, ScreenManager, SlideTransition
 from kivy.core.image import Image as CoreImage
 from kivy.uix.label import Label
 from kivy.metrics import sp
+from kivy.uix.boxlayout import BoxLayout
 from kivy.utils import platform
 from functools import partial
 from random import randint, random
@@ -46,8 +47,8 @@ PERCENT_BIGTIME_JEWEL = 20 / 100.
 
 COLORS = [get_color_from_hex(x) for x in (
     '#95a5a6', # white
-    '#c0392b', # red
-    '#d35400', # orange
+    '#de3c3c', # red
+    '#e3710e', # orange
     '#b155d8', # purple
     '#f1c40f', # yellow
     '#3498db', # blue
@@ -74,6 +75,39 @@ Builder.load_string('''
     font_size: '30sp'
     size_hint: None, None
     center: self.origin[0], self.origin[1] + self.dy
+
+<GameOverGraphBar>:
+    orientation: 'vertical'
+
+    Widget:
+        size_hint_y: None
+        height: '20sp'
+
+    Widget:
+        id: wd
+        canvas:
+            Color:
+                rgb: app.background_rgb
+            Rectangle:
+                pos: self.pos
+                size: self.width, self.height * root.alphascore
+
+        Label:
+            id: wdl
+            text: root.to_human(root.score * root.alpha)
+            font_size: '20sp'
+            center_x: wd.center_x
+            y: wd.y + wd.height * root.alphascore
+            height: self.texture_size[1]
+
+
+    Label:
+        text: '{}'.format(root.level)
+        font_size: '20sp'
+        text_size: (self.width, None)
+        halign: 'center'
+        height: self.texture_size[1]
+        size_hint_y: None
 
 <JewelButton@Button>:
     background_down: 'data/gem_selected.png'
@@ -144,8 +178,6 @@ Builder.load_string('''
             pos: self.x, self.y
             size: self.width * app.timer_next / 60., self.height / 2.
 
-        
-
 <GameOver>:
     BoxLayout:
         orientation: 'vertical'
@@ -154,23 +186,29 @@ Builder.load_string('''
 
         Label:
             text: 'Game Over'
-            font_size: '60sp'
-            size_hint_y: .25
+            font_size: self.height / 1.2
+            size_hint_y: .10
 
-        BoxLayout:
-            Label:
-                text: '{}'.format(app.score)
-                font_size: '70sp'
+        Label:
+            text: '{}'.format(app.score)
+            font_size: self.height / 1.4
+            size_hint_y: .20
 
-            Label:
-                text: '1. {}\\n2. {}\\n3. {}\\n'.format(*app.highscores)
-                font_size: '40sp'
+        Label:
+            text: '1. {}\\n2. {}\\n3. {}\\n'.format(*app.highscores)
+            font_size: self.height / 4.
+            size_hint_y: .20
+
+        GameOverGraph:
+            id: graph
+            size_hint_y: .30
+            spacing: '10sp'
 
         JewelButton:
             text: 'Restart'
-            font_size: '25sp'
+            font_size: self.height / 2
             on_release: app.start()
-            size_hint_y: .25
+            size_hint_y: .20
 
 <Sidebar@BoxLayout>:
     orientation: 'horizontal'
@@ -749,9 +787,52 @@ class Board(StencilView):
             jewel.animate_to(x, y)#, d=(iy - missing) / 10.)
             board[ix][iy] = jewel
 
+class GameOverGraphBar(BoxLayout):
+    level = NumericProperty(0)
+    score = NumericProperty(0)
+    alpha = NumericProperty(0)
+    alphascore = NumericProperty(0)
+    maxscore = NumericProperty(0)
+
+    def animate(self):
+        if self.maxscore == 0:
+            return
+        Animation(alphascore=self.score / float(self.maxscore),
+                alpha=1.).start(self)
+
+    def to_human(self, value):
+        value = int(value)
+        if value > 1000:
+            value = int(value / 1000)
+            return '{}K'.format(value)
+        return '{}'.format(value)
+
+class GameOverGraph(BoxLayout):
+
+    def reset(self):
+        app = App.get_running_app()
+        self.clear_widgets()
+        maxscore = max(app.score_levels)
+        self.add_widget(Widget())
+        for index in range(len(app.score_levels)):
+            self.add_widget(GameOverGraphBar(level=index + 1,
+                score=app.score_levels[index],
+                maxscore=maxscore))
+        self.add_widget(Widget())
+
+    def animate(self):
+        for bar in self.children:
+            if isinstance(bar, GameOverGraphBar):
+                bar.animate()
 
 class GameOver(Screen):
-    pass
+    def on_pre_enter(self):
+        super(GameOver, self).on_enter()
+        self.ids.graph.reset()
+
+    def on_enter(self):
+        super(GameOver, self).on_enter()
+        self.ids.graph.animate()
 
 
 class JewelUI(Screen):
@@ -795,6 +876,10 @@ class JewelApp(App):
 
     textures = DictProperty()
 
+    score_levels = ListProperty([0])
+
+    gameover_graph = ObjectProperty()
+
     def build(self):
         self.highscore_fn = join(self.user_data_dir, 'highscore.dat')
 
@@ -814,6 +899,8 @@ class JewelApp(App):
         self.ui_jewel = JewelUI(name='jewel')
         self.root.add_widget(self.ui_jewel)
         self.start()
+
+        Clock.schedule_interval(self.update_time, 1 / 20.)
 
         # load highscores
         if not exists(self.highscore_fn):
@@ -843,6 +930,7 @@ class JewelApp(App):
         self.level_time = LEVEL_TIME
         self.start_time = time()
         self.no_touch = False
+        self.score_levels = [0]
 
         self.root.current = 'jewel'
 
@@ -852,7 +940,6 @@ class JewelApp(App):
         self.update_background()
 
     def update_background(self, *args):
-
         index = (self.score_multiplier - 1) % len(BACKGROUND_COLORS)
         c = BACKGROUND_COLORS[index]
         Animation(background_rgb=c).start(self)
@@ -861,6 +948,9 @@ class JewelApp(App):
         self.no_touch = True
         self.timer = 0
         Clock.unschedule(self.update_timer)
+
+        if not any([self.score_combo, self.timer, self.timer_next]):
+            self.check_game_over()
 
     def check_game_over(self, *args):
         if any([self.score_combo, self.timer, self.timer_next]):
@@ -872,9 +962,11 @@ class JewelApp(App):
                 self.root.add_widget(GameOver(name='gameover'))
             self.root.current = 'gameover'
 
+    def update_time(self, dt):
+        self.time += dt
+
     def update_timer(self, dt):
         self.timer = self.level_time - (time() - self.start_time)
-        self.time += dt
 
         t = self.timer + self.timer_next
         if t < 10:
@@ -883,7 +975,6 @@ class JewelApp(App):
                     ((10. - t) / 10.) * .3 + a * .5]
         else:
             self.sidebar_warning_color = [0, 0, 0, 0]
-
 
         if self.timer > 0:
             return
@@ -898,6 +989,7 @@ class JewelApp(App):
         self.level_time = self.timer_next
         self.timer = self.level_time - (time() - self.start_time)
         self.timer_next = self.property('timer_next').defaultvalue
+        self.score_levels.append(0)
         self.board.levelup()
 
 
@@ -922,6 +1014,7 @@ class JewelApp(App):
         score *= (1 + self.score_combo)
         score *= m
         self.score += score
+        self.score_levels[-1] += score
 
         if score == 0:
             return
