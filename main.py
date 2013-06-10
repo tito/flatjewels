@@ -1,4 +1,16 @@
-__version__ = '0.1'
+'''
+Flat Jewels
+===========
+
+.. author: Mathieu Virbel
+
+You can play to the game freely.
+You are not allowed to distribute your own game based on this code, modified or
+not.
+
+'''
+
+__version__ = '0.2'
 
 import json
 from os.path import exists, join
@@ -16,6 +28,7 @@ from kivy.uix.screenmanager import Screen, ScreenManager, SlideTransition
 from kivy.core.image import Image as CoreImage
 from kivy.uix.label import Label
 from kivy.metrics import sp
+from kivy.utils import platform
 from functools import partial
 from random import randint, random
 from math import sin
@@ -25,9 +38,9 @@ SIZE = 8
 LEVEL_TIME = 60
 
 # Percentage of timed jewel to generate
-PERCENT_TIMED_JEWEL = 10 / 100.
+PERCENT_TIMED_JEWEL = 12 / 100.
 # Decrease of the percentage after each level
-DECREASE_TIMED_JEWEL = 0.8
+DECREASE_TIMED_JEWEL = 0.9
 # Percentage of big timed jewel to generate (10 instead of 5)
 PERCENT_BIGTIME_JEWEL = 20 / 100.
 
@@ -35,21 +48,37 @@ COLORS = [get_color_from_hex(x) for x in (
     '#95a5a6', # white
     '#c0392b', # red
     '#d35400', # orange
-    '#8e44ad', # purple
+    '#b155d8', # purple
     '#f1c40f', # yellow
     '#3498db', # blue
     '#2ecc71', # green
     )]
 
+BACKGROUND_COLORS = [get_color_from_hex(x) for x in (
+    '0dc1f2', # light blue
+    'f25dee', # light pink
+    'f1f20d', # light yellow
+    '69c005', # dark green
+    '631db9', # dark purple
+    'cb0505', # dark red
+)]
 
-Builder.load_string('''
+if platform() not in ('android', 'ios'):
+    Builder.load_string('''
 <Label>:
     font_name: 'data/coolvetica rg.ttf'
+''')
 
+Builder.load_string('''
 <ScoreLabel>:
     font_size: '30sp'
     size_hint: None, None
     center: self.origin[0], self.origin[1] + self.dy
+
+<JewelButton@Button>:
+    background_down: 'data/gem_selected.png'
+    background_normal: 'data/gem.png'
+    border: (32, 32, 32, 32)
 
 <Jewel>:
     canvas:
@@ -100,7 +129,7 @@ Builder.load_string('''
 <Timer@Widget>:
     canvas:
         Color:
-            hsv: app.background_hsv[:1] + [.6, .6]
+            rgb: app.background_rgb
         Rectangle:
             pos: self.pos
             size: self.size
@@ -118,14 +147,10 @@ Builder.load_string('''
         
 
 <GameOver>:
-    canvas:
-        Color:
-            rgb: .1, .1, .1
-        Rectangle:
-            size: self.size
-
     BoxLayout:
         orientation: 'vertical'
+        padding: '10sp'
+        spacing: '10sp'
 
         Label:
             text: 'Game Over'
@@ -141,7 +166,7 @@ Builder.load_string('''
                 text: '1. {}\\n2. {}\\n3. {}\\n'.format(*app.highscores)
                 font_size: '40sp'
 
-        Button:
+        JewelButton:
             text: 'Restart'
             font_size: '25sp'
             on_release: app.start()
@@ -168,12 +193,10 @@ Builder.load_string('''
         font_size: '30dp'
 
 
-
-<JewelUI>:
+<ScreenManager>:
     canvas:
         Color:
-            hsv: app.background_hsv
-            a: .08
+            rgba: app.background_rgb + [.08]
         Rectangle:
             size: self.size
         PushMatrix
@@ -220,6 +243,8 @@ Builder.load_string('''
         PopMatrix
 
 
+
+<JewelUI>:
     BoxLayout:
         orientation: 'vertical'
         padding: '0dp', '5dp'
@@ -366,12 +391,27 @@ class Board(StencilView):
 
         # fill the board
         self.first_fill = True
-        Clock.schedule_once(self.fill_board, 1)
-
+        self.first_run = True
         self.bind(pos=self.do_layout, size=self.do_layout)
+
+    def reset(self):
+        for ix in range(SIZE):
+            for iy in range(SIZE):
+                jewel = self.board[ix][iy]
+                if jewel:
+                    self.remove_widget(jewel)
+
+        self.first_fill = True
+        self.blocked_rows = [0] * SIZE
+        self.board = []
+        for index in range(SIZE):
+            self.board += [[None] * SIZE]
+        Clock.schedule_once(self.fill_board, .5)
 
     def do_layout(self, *args):
         if self.first_fill:
+            Clock.unschedule(self.fill_board)
+            Clock.schedule_once(self.fill_board, .5)
             return
         js = self.jewel_size
         for ix in range(SIZE):
@@ -398,6 +438,7 @@ class Board(StencilView):
                 self.board[ix][iy] = jewel
 
         self.first_fill = False
+        self.first_run = False
 
 
     def index_to_pos(self, ix, iy):
@@ -722,7 +763,11 @@ class ScoreLabel(Label):
     origin = ListProperty([0, 0])
     def __init__(self, **kwargs):
         super(ScoreLabel, self).__init__(**kwargs)
-        Animation(dy=sp(50), opacity=0., d=.5).start(self)
+        Animation(dy=sp(50), color=(1, 1, 1, 0.), d=.5).start(self)
+
+    def on_opacity(self, *args):
+        if self.opacity == 0 and self.parent:
+            self.parent.remove_widget(self)
 
 
 class JewelApp(App):
@@ -742,9 +787,7 @@ class JewelApp(App):
 
     highscores = ListProperty([0, 0, 0])
 
-    background_hsv = ListProperty([137 / 255., 244 / 255., 1.])
-
-    background_angle = NumericProperty(0)
+    background_rgb = ListProperty([0, 0, 0])
 
     sidebar_warning_color = ListProperty([0, 0, 0, 0])
 
@@ -754,12 +797,16 @@ class JewelApp(App):
 
     def build(self):
         self.highscore_fn = join(self.user_data_dir, 'highscore.dat')
-        self.root = ScreenManager(transition=SlideTransition())
 
+        from kivy.base import EventLoop
+        EventLoop.ensure_window()
         # load textures
         for fn in ('gem', 'gem_selected', 't5', 't10', 'tarea', 'tline', 'star'):
             texture = CoreImage(join('data', '{}.png'.format(fn)), mipmap=True).texture
             self.textures[fn] = texture
+
+
+        self.root = ScreenManager(transition=SlideTransition())
 
         self.bind(score_combo=self.check_game_over,
                 timer=self.check_game_over,
@@ -786,6 +833,9 @@ class JewelApp(App):
             json.dump(self.highscores, fd)
 
     def start(self):
+        if not self.board.first_run:
+            self.board.reset()
+
         self.score = 0
         self.score_combo = 0
         self.score_multiplier = 1
@@ -797,6 +847,15 @@ class JewelApp(App):
         self.root.current = 'jewel'
 
         Clock.schedule_interval(self.update_timer, 1 / 20.)
+
+        self.bind(score_multiplier=self.update_background)
+        self.update_background()
+
+    def update_background(self, *args):
+
+        index = (self.score_multiplier - 1) % len(BACKGROUND_COLORS)
+        c = BACKGROUND_COLORS[index]
+        Animation(background_rgb=c).start(self)
 
     def game_over(self):
         self.no_touch = True
@@ -838,7 +897,7 @@ class JewelApp(App):
         self.start_time = time()
         self.level_time = self.timer_next
         self.timer = self.level_time - (time() - self.start_time)
-        self.timer_next = 0
+        self.timer_next = self.property('timer_next').defaultvalue
         self.board.levelup()
 
 
@@ -868,7 +927,7 @@ class JewelApp(App):
             return
 
         js = self.board.jewel_size
-        self.ui_jewel.add_widget(ScoreLabel(text='{}'.format(score),
-            origin=(x + js / 2, y + js / 2)))
+        label = ScoreLabel(text='{}'.format(score), origin=(x + js / 2, y + js / 2))
+        self.ui_jewel.add_widget(label)
 
 JewelApp().run()
