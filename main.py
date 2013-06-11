@@ -10,7 +10,7 @@ not.
 
 '''
 
-__version__ = '0.2.2'
+__version__ = '0.2.3'
 
 import json
 from os.path import exists, join
@@ -44,6 +44,10 @@ PERCENT_TIMED_JEWEL = 12 / 100.
 DECREASE_TIMED_JEWEL = 0.9
 # Percentage of big timed jewel to generate (10 instead of 5)
 PERCENT_BIGTIME_JEWEL = 20 / 100.
+
+if 0:
+    LEVEL_TIME = 2
+    PERCENT_TIMED_JEWEL = 1.
 
 COLORS = [get_color_from_hex(x) for x in (
     '#95a5a6', # white
@@ -361,8 +365,7 @@ class TimedJewel(Jewel):
         super(TimedJewel, self).__init__(**kwargs)
 
     def explode(self, *args):
-        self.board.app.timer_next = min(
-            LEVEL_TIME, self.time + self.board.app.timer_next)
+        self.board.app.increase_timer_next(self.time)
         super(TimedJewel, self).explode(*args)
 
 
@@ -433,12 +436,7 @@ class Board(StencilView):
         self.bind(pos=self.do_layout, size=self.do_layout)
 
     def reset(self):
-        for ix in range(SIZE):
-            for iy in range(SIZE):
-                jewel = self.board[ix][iy]
-                if jewel:
-                    self.remove_widget(jewel)
-
+        self.clear_widgets()
         self.first_fill = True
         self.blocked_rows = [0] * SIZE
         self.board = []
@@ -502,7 +500,7 @@ class Board(StencilView):
 
         cls = Jewel
 
-        if not self.first_fill:
+        if not self.first_fill and not self.app.no_touch:
             if random() < PERCENT_TIMED_JEWEL * pow(
                     DECREASE_TIMED_JEWEL, self.app.score_multiplier):
                 cls = TimedJewel
@@ -757,6 +755,20 @@ class Board(StencilView):
                     cls = LineBombJewel
                 self.generate_at(ix, iy, index=jewel.index, cls=cls)
 
+    def gameover(self):
+        for ix in range(0, SIZE):
+            for iy in range(0, SIZE):
+                jewel = self.board[ix][iy]
+                if not isinstance(jewel, TimedJewel):
+                    continue
+                self.remove_widget(jewel)
+                self.board[ix][iy] = None
+                if jewel.time == 5:
+                    cls = AreaBombJewel
+                else:
+                    cls = LineBombJewel
+                self.generate_at(ix, iy, index=jewel.index, cls=cls)
+
     def refill(self, ix):
 
         # then make them fall down
@@ -947,10 +959,8 @@ class JewelApp(App):
     def game_over(self):
         self.no_touch = True
         self.timer = 0
+        self.board.gameover()
         Clock.unschedule(self.update_timer)
-
-        if not any([self.score_combo, self.timer, self.timer_next]):
-            self.check_game_over()
 
     def check_game_over(self, *args):
         if any([self.score_combo, self.timer, self.timer_next]):
@@ -1022,5 +1032,10 @@ class JewelApp(App):
         js = self.board.jewel_size
         label = ScoreLabel(text='{}'.format(score), origin=(x + js / 2, y + js / 2))
         self.ui_jewel.add_widget(label)
+
+    def increase_timer_next(self, t):
+        if self.no_touch:
+            return
+        self.timer_next = min(LEVEL_TIME, t + self.timer_next)
 
 JewelApp().run()
