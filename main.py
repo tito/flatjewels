@@ -10,7 +10,7 @@ not.
 
 '''
 
-__version__ = '0.2.3'
+__version__ = '0.3.0'
 
 import json
 from os.path import exists, join
@@ -37,6 +37,7 @@ from time import time
 
 SIZE = 8
 LEVEL_TIME = 60
+HINT_TIME = 4
 
 # Percentage of timed jewel to generate
 PERCENT_TIMED_JEWEL = 12 / 100.
@@ -79,6 +80,9 @@ Builder.load_string('''
     font_size: '30sp'
     size_hint: None, None
     center: self.origin[0], self.origin[1] + self.dy
+
+<TitleText>:
+    font_size: '50sp'
 
 <GameOverGraphBar>:
     orientation: 'vertical'
@@ -233,6 +237,9 @@ Builder.load_string('''
     Label:
         text: '{}'.format(app.score_combo)
         font_size: '30dp'
+    #Button:
+    #    text: 'Find moves'
+    #    on_release: print app.board.highlight_move()
 
 
 <ScreenManager>:
@@ -307,6 +314,15 @@ Builder.load_string('''
 ''')
 
 
+def print_time_spent(f):
+    def f2(*args, **kwargs):
+        start = time()
+        ret = f(*args, **kwargs)
+        print('{!r} executed in {}ms'.format(
+            f.__name__, int((time() - start) * 1000)))
+        return ret
+    return f2
+
 class Jewel(Widget):
     color = ListProperty([0, 0, 0])
     index = NumericProperty(0)
@@ -316,6 +332,7 @@ class Jewel(Widget):
     selected = BooleanProperty(False)
     animating = BooleanProperty(False)
     anim = ObjectProperty(None, allownone=True)
+    anim_highlight = ObjectProperty(None, allownone=True)
 
     def animate_to(self, x, y, d=0, x2=None, y2=None):
         self.animating = True
@@ -355,6 +372,18 @@ class Jewel(Widget):
 
     def destroy(self, *args):
         self.board.remove_widget(self)
+
+    def highlight(self):
+        if self.anim_highlight:
+            self.anim_highlight.cancel(self)
+            self.anim_highlight = None
+        d = .3
+        anim_highlight = (
+            Animation(opacity=.2, d=d) + Animation(opacity=1., d=d) +
+            Animation(opacity=.2, d=d) + Animation(opacity=1., d=d) +
+            Animation(opacity=.2, d=d) + Animation(opacity=1., d=d))
+        self.anim_highlight = anim_highlight
+        anim_highlight.start(self)
 
 
 class TimedJewel(Jewel):
@@ -421,6 +450,7 @@ class Board(StencilView):
     def __init__(self, **kwargs):
         super(Board, self).__init__(**kwargs)
 
+        self.highlight = None
         self.app = App.get_running_app()
         self.app.board = self
         self.blocked_rows = [0] * SIZE
@@ -576,10 +606,10 @@ class Board(StencilView):
         else:
             iy2 += 1 if dy > 0 else -1
 
-        self.swap(ix, iy, ix2, iy2)
+        self.swap_with_anim(ix, iy, ix2, iy2)
         touch.ud['action'] = True
 
-    def swap(self, ix1, iy1, ix2, iy2):
+    def swap_with_anim(self, ix1, iy1, ix2, iy2):
         jewel1 = self.board[ix1][iy1]
         jewel2 = self.board[ix2][iy2]
         if jewel1 is None or jewel2 is None:
@@ -610,6 +640,82 @@ class Board(StencilView):
             jewel1.animate_to(*self.index_to_pos(ix2, iy2))
             jewel2.animate_to(*self.index_to_pos(ix1, iy1))
 
+    def highlight_move(self):
+        possible_move = self.find_moves()
+        if not possible_move:
+            return
+        ix, iy = possible_move
+        jewel = self.board[ix][iy]
+        jewel.highlight()
+
+    #@print_time_spent
+    def find_moves(self):
+        board = self.board
+
+        def check_moves(x2, y2):
+            # FIXME reorganize to prevent too much access on board
+            i22 = board[x2][y2]
+            if i22 is None:
+                return False
+            i22_index = i22.index
+
+            i02 = i42 = i20 = i24 = i12 = i32 = i21 = i23 = None
+            if x2 >= 2:
+                i02 = board[x2 - 2][y2]
+            if x2 <= SIZE - 3:
+                i42 = board[x2 + 2][y2]
+            if y2 >= 2:
+                i20 = board[x2][y2 - 2]
+            if y2 <= SIZE - 3:
+                i24 = board[x2][y2 + 2]
+            if x2 >= 1:
+                i12 = board[x2 - 1][y2]
+            if x2 <= SIZE - 2:
+                i32 = board[x2 + 1][y2]
+            if y2 >= 1:
+                i21 = board[x2][y2 - 1]
+            if y2 <= SIZE - 2:
+                i23 = board[x2][y2 + 1]
+
+            return (
+                (i02 is not None and i12 is not None
+                    and i02.index == i12.index == i22_index) or
+                (i32 is not None and i42 is not None
+                    and i32.index == i42.index == i22_index) or
+                (i20 is not None and i21 is not None
+                    and i20.index == i21.index == i22_index) or
+                (i23 is not None and i24 is not None
+                    and i23.index == i24.index == i22_index) or
+                (i12 is not None and i32 is not None
+                    and i12.index == i32.index == i22_index) or
+                (i21 is not None and i23 is not None
+                    and i21.index == i23.index == i22_index))
+
+        def swap_and_check(x1, y1, x2, y2):
+            j1 = board[x1][y1]
+            j2 = board[x2][y2]
+            board[x1][y1] = j2
+            board[x2][y2] = j1
+            ret = check_moves(x1, y1)
+            board[x1][y1] = j1
+            board[x2][y2] = j2
+            return ret
+
+        for x in range(SIZE):
+            for y in range(SIZE):
+                if y >= 1:
+                    if swap_and_check(x, y, x, y - 1):
+                        return x, y - 1
+                if y < SIZE - 1:
+                    if swap_and_check(x, y, x, y + 1):
+                        return x, y + 1
+                if x >= 1:
+                    if swap_and_check(x, y, x - 1, y):
+                        return x - 1, y
+                if x < SIZE - 1:
+                    if swap_and_check(x, y, x + 1, y):
+                        return x + 1, y
+
 
     def have_combo(self, jewel):
         sel_all, sel_x, sel_y = self.extract_combo(jewel)
@@ -623,7 +729,6 @@ class Board(StencilView):
         if l_x < 2 and l_y < 2:
             return
         return True
-
 
     def extract_combo(self, jewel):
         sel_all = []
@@ -739,7 +844,10 @@ class Board(StencilView):
                 self.refill(row)
 
     def reset_combo(self, *dt):
-        self.app.score_combo = 0
+        self.app.reset_combo()
+        if self.find_moves() is None:
+            self.reset()
+            self.app.show_text('No more moves')
 
     def levelup(self):
         for ix in range(0, SIZE):
@@ -798,6 +906,7 @@ class Board(StencilView):
             jewel.pos = ax, ay
             jewel.animate_to(x, y)#, d=(iy - missing) / 10.)
             board[ix][iy] = jewel
+
 
 class GameOverGraphBar(BoxLayout):
     level = NumericProperty(0)
@@ -863,6 +972,18 @@ class ScoreLabel(Label):
             self.parent.remove_widget(self)
 
 
+class TitleText(Label):
+
+    def __init__(self, **kwargs):
+        super(TitleText, self).__init__(**kwargs)
+        self.opacity = 0.
+        self.pos_hint = {'center_y': 0.}
+        anim = (
+            Animation(opacity=1., d=.5, pos_hint={'center_y': .50}, t='out_quad') +
+            Animation(opacity=0., d=.5, pos_hint={'center_y': 1.}, t='in_quad'))
+        anim.start(self)
+
+
 class JewelApp(App):
     score = NumericProperty(0)
 
@@ -891,6 +1012,8 @@ class JewelApp(App):
     score_levels = ListProperty([0])
 
     gameover_graph = ObjectProperty()
+
+    timer_hint = NumericProperty(0)
 
     def build(self):
         self.highscore_fn = join(self.user_data_dir, 'highscore.dat')
@@ -940,7 +1063,7 @@ class JewelApp(App):
         self.score_multiplier = 1
         self.timer = LEVEL_TIME
         self.level_time = LEVEL_TIME
-        self.start_time = time()
+        self.start_time = self.timer_hint = time()
         self.no_touch = False
         self.score_levels = [0]
 
@@ -950,6 +1073,8 @@ class JewelApp(App):
 
         self.bind(score_multiplier=self.update_background)
         self.update_background()
+
+        self.show_text('Level 1')
 
     def update_background(self, *args):
         index = (self.score_multiplier - 1) % len(BACKGROUND_COLORS)
@@ -976,7 +1101,14 @@ class JewelApp(App):
         self.time += dt
 
     def update_timer(self, dt):
-        self.timer = self.level_time - (time() - self.start_time)
+        current_time = time()
+        self.timer = self.level_time - (current_time - self.start_time)
+
+        should_hint = current_time - self.timer_hint
+        if should_hint > HINT_TIME:
+            self.timer_hint = current_time
+            if self.score_combo == 0:
+                self.board.highlight_move()
 
         t = self.timer + self.timer_next
         if t < 10:
@@ -1001,6 +1133,7 @@ class JewelApp(App):
         self.timer_next = self.property('timer_next').defaultvalue
         self.score_levels.append(0)
         self.board.levelup()
+        self.show_text('Level {}'.format(self.score_multiplier))
 
 
     def add_score(self, ix, iy, pattern, count):
@@ -1037,5 +1170,13 @@ class JewelApp(App):
         if self.no_touch:
             return
         self.timer_next = min(LEVEL_TIME, t + self.timer_next)
+
+    def reset_combo(self):
+        self.score_combo = 0
+        self.timer_hint = time()
+
+    def show_text(self, text):
+        ttext = TitleText(text=text)
+        self.ui_jewel.add_widget(ttext)
 
 JewelApp().run()
