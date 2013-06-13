@@ -10,10 +10,12 @@ not.
 
 '''
 
-__version__ = '0.3.0'
+__version__ = '0.3.1'
 
 import json
 from os.path import exists, join
+#from kivy.config import Config
+#Config.set('graphics', 'maxfps', '30')
 from kivy.app import App
 from kivy.uix.widget import Widget
 from kivy.lang import Builder
@@ -31,9 +33,14 @@ from kivy.metrics import sp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.utils import platform
 from functools import partial
-from random import randint, random
+from random import randint, random, shuffle
 from math import sin
 from time import time
+
+PLATFORM = platform()
+
+if PLATFORM == 'android':
+    import android
 
 SIZE = 8
 LEVEL_TIME = 60
@@ -69,7 +76,8 @@ BACKGROUND_COLORS = [get_color_from_hex(x) for x in (
     'cb0505', # dark red
 )]
 
-if platform() not in ('android', 'ios'):
+PLATFORM = platform()
+if PLATFORM not in ('android', 'ios'):
     Builder.load_string('''
 <Label>:
     font_name: 'data/coolvetica rg.ttf'
@@ -465,9 +473,9 @@ class Board(StencilView):
         self.first_run = True
         self.bind(pos=self.do_layout, size=self.do_layout)
 
-    def reset(self):
+    def reset(self, first_fill=True):
         self.clear_widgets()
-        self.first_fill = True
+        self.first_fill = first_fill
         self.blocked_rows = [0] * SIZE
         self.board = []
         for index in range(SIZE):
@@ -552,10 +560,49 @@ class Board(StencilView):
         self.add_widget(jewel)
         return jewel
 
+    def shuffle(self):
+        dest = []
+        desti = range(SIZE * SIZE)
+        desti += range(SIZE * SIZE)
+        #shuffle(desti)
+        desti = desti[2:]
+        for ix in range(SIZE):
+            for iy in reversed(range(SIZE)):
+                dest.append((ix, iy))
+
+        newboard = []
+        board = self.board
+        for _ in range(SIZE):
+            newboard += [[None] * SIZE]
+        for _ix in range(SIZE):
+            for _iy in range(SIZE):
+                jewel = board[_ix][_iy]
+                ix, iy = dest[desti.pop()]
+                if not jewel:
+                    print 'BOARD EMPTY???', (ix, iy), self.board[ix][iy]
+                    jewel = self.generate()
+                    jewel.ix = ix
+                    jewel.iy = iy
+                    newboard[ix][iy] = jewel
+                    print 'GENERATE'
+                    continue
+                print 'move jewel', (jewel.ix, jewel.iy), 'to', (ix, iy)
+                jewel.ix = ix
+                jewel.iy = iy
+                newboard[ix][iy] = jewel
+                jewel.animate_to(*self.index_to_pos(ix, iy))
+                #jewel.pos = self.index_to_pos(ix, iy)
+
+        self.board = newboard
+
+
     def on_touch_down(self, touch):
         if self.app.no_touch:
             return
         if not self.collide_point(*touch.pos):
+            return
+        #if touch.is_triple_tap:
+        #    self.shuffle()
             return
         ix, iy = self.touch_to_index(*touch.pos)
         jewel = self.board[ix][iy]
@@ -639,6 +686,9 @@ class Board(StencilView):
         else:
             jewel1.animate_to(*self.index_to_pos(ix2, iy2))
             jewel2.animate_to(*self.index_to_pos(ix1, iy1))
+
+            #if PLATFORM == 'android':
+            #    android.vibrate(.04)
 
     def highlight_move(self):
         possible_move = self.find_moves()
@@ -839,6 +889,8 @@ class Board(StencilView):
 
     def unblock_rows(self, rows, *args):
         for row in rows:
+            if self.blocked_rows[row] == 0:
+                continue
             self.blocked_rows[row] -= 1
             if self.blocked_rows[row] == 0:
                 self.refill(row)
@@ -846,7 +898,7 @@ class Board(StencilView):
     def reset_combo(self, *dt):
         self.app.reset_combo()
         if self.find_moves() is None:
-            self.reset()
+            self.reset(first_fill=True)
             self.app.show_text('No more moves')
 
     def levelup(self):
@@ -1036,6 +1088,8 @@ class JewelApp(App):
         self.start()
 
         Clock.schedule_interval(self.update_time, 1 / 20.)
+        #Clock.schedule_interval(self._stats, 1 / 60.)
+        #self._stats()
 
         # load highscores
         if not exists(self.highscore_fn):
@@ -1178,5 +1232,38 @@ class JewelApp(App):
     def show_text(self, text):
         ttext = TitleText(text=text)
         self.ui_jewel.add_widget(ttext)
+
+    '''
+    def _stats(self, *dt):
+        if not hasattr(self, '_stat_frame'):
+            self._stat_frame = 0
+            self._stat_lastdiff = 0
+            self._stat_time = time()
+            self._stat_profile = None
+            return
+
+        if self._stat_frame % 100 == 0:
+            if self._stat_profile is not None:
+                self._stat_profile.disable()
+                self._stat_profile.create_stats()
+                fn = '/sdcard/frame{}'.format(self._stat_frame)
+                self._stat_profile.dump_stats(fn)
+                print '-- dump stats to', fn
+
+            self._stat_profile = profile.Profile()
+            self._stat_profile.enable()
+
+        current = time()
+        diff = (current - self._stat_time) * 1000
+        warning = None
+        if abs(diff - self._stat_lastdiff) > self._stat_lastdiff * 0.5:
+            warning = abs(diff - self._stat_lastdiff)
+        self._stat_lastdiff = diff
+        print 'Frame {}: {:.4f} {}'.format(self._stat_frame, diff,
+                'WARNING {}ms'.format(warning) if warning is not None else '')
+        self._stat_frame += 1
+        self._stat_time = current
+    '''
+
 
 JewelApp().run()
