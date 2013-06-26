@@ -10,7 +10,7 @@ not.
 
 '''
 
-__version__ = '0.3.1'
+__version__ = '0.3.2'
 
 import json
 from os.path import exists, join
@@ -32,6 +32,7 @@ from kivy.uix.label import Label
 from kivy.metrics import sp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.utils import platform
+from kivy.core.audio import SoundLoader
 from functools import partial
 from random import randint, random, shuffle
 from math import sin
@@ -54,7 +55,7 @@ DECREASE_TIMED_JEWEL = 0.9
 PERCENT_BIGTIME_JEWEL = 20 / 100.
 
 if 0:
-    LEVEL_TIME = 2
+    LEVEL_TIME = 10
     PERCENT_TIMED_JEWEL = 1.
 
 COLORS = [get_color_from_hex(x) for x in (
@@ -377,6 +378,7 @@ class Jewel(Widget):
                   size=(1, 1), opacity=0., d=.3)
         anim.bind(on_complete=self.destroy)
         anim.start(self)
+        App.get_running_app().sound('explode')
 
     def destroy(self, *args):
         self.board.remove_widget(self)
@@ -686,6 +688,7 @@ class Board(StencilView):
         else:
             jewel1.animate_to(*self.index_to_pos(ix2, iy2))
             jewel2.animate_to(*self.index_to_pos(ix1, iy1))
+            self.app.sound('move')
 
             #if PLATFORM == 'android':
             #    android.vibrate(.04)
@@ -882,6 +885,9 @@ class Board(StencilView):
 
         # more combo!
         self.app.score_combo += 1
+        ix = jewels[0].ix
+        iy = jewels[0].iy
+        self.app.add_score(ix, iy, 'combo', 1)
 
         Clock.unschedule(self.reset_combo)
         Clock.schedule_once(self.reset_combo, d + 1.)
@@ -1068,6 +1074,7 @@ class JewelApp(App):
     timer_hint = NumericProperty(0)
 
     def build(self):
+        self.load_sounds()
         self.highscore_fn = join(self.user_data_dir, 'highscore.dat')
 
         from kivy.base import EventLoop
@@ -1139,6 +1146,7 @@ class JewelApp(App):
         self.no_touch = True
         self.timer = 0
         self.board.gameover()
+        self.sound('gameover')
         Clock.unschedule(self.update_timer)
 
     def check_game_over(self, *args):
@@ -1188,6 +1196,7 @@ class JewelApp(App):
         self.score_levels.append(0)
         self.board.levelup()
         self.show_text('Level {}'.format(self.score_multiplier))
+        self.sound('levelup')
 
 
     def add_score(self, ix, iy, pattern, count):
@@ -1207,8 +1216,9 @@ class JewelApp(App):
             score += count * 500
         elif pattern == 'line':
             score += count * 1000
+        elif pattern == 'combo':
+            score += self.score_combo + 1000
 
-        score *= (1 + self.score_combo)
         score *= m
         self.score += score
         self.score_levels[-1] += score
@@ -1232,6 +1242,34 @@ class JewelApp(App):
     def show_text(self, text):
         ttext = TitleText(text=text)
         self.ui_jewel.add_widget(ttext)
+
+    def load_sounds(self):
+        self.music = SoundLoader.load('data/audio/Art.ogg')
+        self.music.loop = True
+        self.music.play()
+
+        self.sounds = {}
+        self.load_sound('move', 'move.ogg', count=5)
+        self.load_sound('levelup', 'warp.ogg')
+        self.load_sound('gameover', 'bell04.ogg')
+
+    def load_sound(self, action, fn, count=1):
+        sounds = [SoundLoader.load('data/audio/{}'.format(fn)) for x in range(count)]
+        self.sounds[action] = sounds
+
+    def play_sound(self, action):
+        sounds = self.sounds[action]
+        sound = sounds.pop(0)
+        sound.play()
+        sounds.append(sound)
+
+    def sound(self, action):
+        if action in ('move', 'explode'):
+            self.play_sound('move')
+        elif action == 'levelup':
+            self.play_sound('levelup')
+        elif action == 'gameover':
+            self.play_sound('gameover')
 
     '''
     def _stats(self, *dt):
