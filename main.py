@@ -8,9 +8,20 @@ You can play to the game freely.
 You are not allowed to distribute your own game based on this code, modified or
 not.
 
+Credits
+-------
+
+* Tetra_-_Hunters: https://www.jamendo.com/fr/track/656920/hunters
+* Jewel movement: http://www.freesound.org/people/junggle/sounds/28826/
+* Warning (modified): http://www.freesound.org/people/Ultranova105/sounds/136756/
+* Time 5 (modified): http://www.freesound.org/people/fins/sounds/133427/
+* Time 10 (modified): http://www.freesound.org/people/fins/sounds/133429/
+* End (modified): http://www.freesound.org/people/fins/sounds/171670/
+* Levelup (modified): http://www.freesound.org/people/JustinBW/sounds/80921/
+
 '''
 
-__version__ = '0.3.2'
+__version__ = '0.4.0'
 
 import json
 from os.path import exists, join
@@ -34,10 +45,11 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.utils import platform
 from kivy.core.audio import SoundLoader
 from functools import partial
-from random import randint, random, shuffle
+from random import randint, random
 from math import sin
 from time import time
 
+HIGHSCORE_VERSION = 1
 PLATFORM = platform()
 
 if PLATFORM == 'android':
@@ -48,9 +60,9 @@ LEVEL_TIME = 60
 HINT_TIME = 4
 
 # Percentage of timed jewel to generate
-PERCENT_TIMED_JEWEL = 12 / 100.
+PERCENT_TIMED_JEWEL = 14 / 100.
 # Decrease of the percentage after each level
-DECREASE_TIMED_JEWEL = 0.9
+DECREASE_TIMED_JEWEL = 0.95
 # Percentage of big timed jewel to generate (10 instead of 5)
 PERCENT_BIGTIME_JEWEL = 20 / 100.
 
@@ -372,13 +384,17 @@ class Jewel(Widget):
             self.anim.cancel(self)
             self.anim = None
 
-    def explode(self, *args):
+    def explode(self, *args, **kwargs):
         m = self.board.jewel_size / 2.
         anim = Animation(pos=(self.x + m, self.y + m),
                   size=(1, 1), opacity=0., d=.3)
         anim.bind(on_complete=self.destroy)
         anim.start(self)
-        App.get_running_app().sound('explode')
+        if 'nosound' not in kwargs:
+            App.get_running_app().sound('explode')
+
+    def explode_nosound(self, *args):
+        self.explode(nosound=True)
 
     def destroy(self, *args):
         self.board.remove_widget(self)
@@ -403,14 +419,15 @@ class TimedJewel(Jewel):
         self.time = 10 if random() < PERCENT_BIGTIME_JEWEL else 5
         super(TimedJewel, self).__init__(**kwargs)
 
-    def explode(self, *args):
+    def explode(self, *args, **kwargs):
         self.board.app.increase_timer_next(self.time)
         super(TimedJewel, self).explode(*args)
+        App.get_running_app().sound('time{}'.format(self.time))
 
 
 class AreaBombJewel(Jewel):
-    def explode(self, *args):
-        super(AreaBombJewel, self).explode(*args)
+    def explode(self, *args, **kwargs):
+        super(AreaBombJewel, self).explode(*args, nosound=True)
         ix, iy = self.ix, self.iy
         jewels = []
         for x in range(max(0, ix - 1), min(SIZE, ix + 2)):
@@ -420,12 +437,13 @@ class AreaBombJewel(Jewel):
                     continue
                 jewels.append(jewel)
         if jewels:
-            self.board.bam(jewels, alltogether=True)
+            App.get_running_app().sound('explode-area')
+            self.board.bam(jewels, alltogether=True, nosound=True)
             self.board.app.add_score(ix, iy, 'area', 1 + len(jewels))
 
 class LineBombJewel(Jewel):
-    def explode(self, *args):
-        super(LineBombJewel, self).explode(*args)
+    def explode(self, *args, **kwargs):
+        super(LineBombJewel, self).explode(*args, nosound=True)
         ix, iy = self.ix, self.iy
         jewels = []
         for x in range(0, SIZE):
@@ -441,7 +459,8 @@ class LineBombJewel(Jewel):
             jewels.append(jewel)
 
         if jewels:
-            self.board.bam(jewels, alltogether=True)
+            App.get_running_app().sound('explode-line')
+            self.board.bam(jewels, alltogether=True, nosound=True)
             self.board.app.add_score(ix, iy, 'line', 1 + len(jewels))
 
 
@@ -581,14 +600,11 @@ class Board(StencilView):
                 jewel = board[_ix][_iy]
                 ix, iy = dest[desti.pop()]
                 if not jewel:
-                    print 'BOARD EMPTY???', (ix, iy), self.board[ix][iy]
                     jewel = self.generate()
                     jewel.ix = ix
                     jewel.iy = iy
                     newboard[ix][iy] = jewel
-                    print 'GENERATE'
                     continue
-                print 'move jewel', (jewel.ix, jewel.iy), 'to', (ix, iy)
                 jewel.ix = ix
                 jewel.iy = iy
                 newboard[ix][iy] = jewel
@@ -821,6 +837,15 @@ class Board(StencilView):
 
         return sel_all, sel_x, sel_y
 
+    def iterate_jewels(self):
+        board = self.board
+        for ix in range(SIZE):
+            xboard = board[ix]
+            for iy in range(SIZE):
+                jewel = xboard[iy]
+                if jewel:
+                    yield ix, iy, jewel
+
     def check(self, jewel):
         sel_all, sel_x, sel_y = self.extract_combo(jewel)
         ix, iy = jewel.ix, jewel.iy
@@ -839,8 +864,15 @@ class Board(StencilView):
         score_count = 1
 
         if l_x >= 2 and l_y >= 2:
-            self.bam([jewel] + sel_all)
-            score_count += l_all
+            score_pattern = '2axes'
+            jewels = [jewel] + sel_all
+            index = jewel.index
+            # match all colors!
+            for _ix, _iy, _jewel in self.iterate_jewels():
+                if _jewel.index == index and _jewel not in jewels:
+                    jewels.append(_jewel)
+            self.bam(jewels)
+            score_count += len(jewels)
 
         elif l_x >= 2:
             self.bam([jewel] + sel_x)
@@ -865,15 +897,18 @@ class Board(StencilView):
         self.app.add_score(ix, iy, score_pattern, score_count)
 
 
-    def bam(self, jewels, alltogether=False):
+    def bam(self, jewels, alltogether=False, **kwargs):
         # first explode all the jewel
         d = 0
         board = self.board
         rows = []
+        nosound = 'nosound' in kwargs
         for jewel in jewels:
             ix, iy = jewel.ix, jewel.iy
             board[ix][iy] = None
-            Clock.schedule_once(jewel.explode, d)
+
+            func = jewel.explode_nosound if nosound else jewel.explode
+            Clock.schedule_once(func, d)
             if not alltogether:
                 d += .2
             if ix not in rows:
@@ -885,8 +920,8 @@ class Board(StencilView):
 
         # more combo!
         self.app.score_combo += 1
-        ix = jewels[0].ix
-        iy = jewels[0].iy
+        ix = jewels[-1].ix
+        iy = jewels[-1].iy
         self.app.add_score(ix, iy, 'combo', 1)
 
         Clock.unschedule(self.reset_combo)
@@ -904,7 +939,7 @@ class Board(StencilView):
     def reset_combo(self, *dt):
         self.app.reset_combo()
         if self.find_moves() is None:
-            self.reset(first_fill=True)
+            self.reset()
             self.app.show_text('No more moves')
 
     def levelup(self):
@@ -1103,7 +1138,9 @@ class JewelApp(App):
             return
         try:
             with open(self.highscore_fn) as fd:
-                self.highscores = json.load(fd)
+                version, highscores = json.load(fd)
+            if version == HIGHSCORE_VERSION:
+                self.highscores = highscores
         except:
             pass
 
@@ -1113,7 +1150,7 @@ class JewelApp(App):
         highscores = list(reversed(highscores))[:3]
         self.highscores = highscores
         with open(self.highscore_fn, 'w') as fd:
-            json.dump(self.highscores, fd)
+            json.dump([HIGHSCORE_VERSION, self.highscores], fd)
 
     def start(self):
         if not self.board.first_run:
@@ -1127,6 +1164,7 @@ class JewelApp(App):
         self.start_time = self.timer_hint = time()
         self.no_touch = False
         self.score_levels = [0]
+        self.audio_warning_index = -1
 
         self.root.current = 'jewel'
 
@@ -1146,7 +1184,7 @@ class JewelApp(App):
         self.no_touch = True
         self.timer = 0
         self.board.gameover()
-        self.sound('gameover')
+        self.sound('end')
         Clock.unschedule(self.update_timer)
 
     def check_game_over(self, *args):
@@ -1163,6 +1201,7 @@ class JewelApp(App):
         self.time += dt
 
     def update_timer(self, dt):
+        self.sound_played = []
         current_time = time()
         self.timer = self.level_time - (current_time - self.start_time)
 
@@ -1177,8 +1216,17 @@ class JewelApp(App):
             a = abs(sin(self.time * 3))
             self.sidebar_warning_color = [1, .1, .1,
                     ((10. - t) / 10.) * .3 + a * .5]
+
+            audio_warning_index = 10 - int(t)
+            if audio_warning_index != self.audio_warning_index:
+                self.play_sound('warning',
+                        volume=(audio_warning_index / 15.))
+                self.audio_warning_index = audio_warning_index
+
         else:
             self.sidebar_warning_color = [0, 0, 0, 0]
+            self.audio_warning_index = -1
+
 
         if self.timer > 0:
             return
@@ -1217,7 +1265,7 @@ class JewelApp(App):
         elif pattern == 'line':
             score += count * 1000
         elif pattern == 'combo':
-            score += self.score_combo + 1000
+            score += self.score_combo * 1000
 
         score *= m
         self.score += score
@@ -1244,32 +1292,40 @@ class JewelApp(App):
         self.ui_jewel.add_widget(ttext)
 
     def load_sounds(self):
-        self.music = SoundLoader.load('data/audio/Art.ogg')
+        self.music = SoundLoader.load('data/audio/Tetra_-_Hunters.ogg')
+        self.music.volume = .35
         self.music.loop = True
         self.music.play()
 
         self.sounds = {}
         self.load_sound('move', 'move.ogg', count=5)
-        self.load_sound('levelup', 'warp.ogg')
-        self.load_sound('gameover', 'bell04.ogg')
+        self.load_sound('levelup', 'levelup.ogg')
+        self.load_sound('end', 'end.ogg')
+        self.load_sound('time5', 'time5.ogg', count=2)
+        self.load_sound('time10', 'time10.ogg', count=2)
+        self.load_sound('warning', 'warning.ogg')
+        self.load_sound('explode-line', 'explode-line.ogg', count=2)
+        self.load_sound('explode-area', 'explode-area.ogg', count=2)
 
     def load_sound(self, action, fn, count=1):
         sounds = [SoundLoader.load('data/audio/{}'.format(fn)) for x in range(count)]
         self.sounds[action] = sounds
 
-    def play_sound(self, action):
+    def play_sound(self, action, volume=1.):
+        if action in self.sound_played:
+            return
+        self.sound_played.append(action)
         sounds = self.sounds[action]
         sound = sounds.pop(0)
+        sound.volume = volume
         sound.play()
         sounds.append(sound)
 
     def sound(self, action):
-        if action in ('move', 'explode'):
-            self.play_sound('move')
-        elif action == 'levelup':
-            self.play_sound('levelup')
-        elif action == 'gameover':
-            self.play_sound('gameover')
+        # no sound for explode yet.
+        if action == 'explode':
+            action = 'move'
+        self.play_sound(action)
 
     '''
     def _stats(self, *dt):

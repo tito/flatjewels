@@ -13,7 +13,7 @@ package.domain = com.meltingrocks
 source.dir = .
 
 # (list) Source files to include (let empty to include all the files)
-source.include_exts = py,png,jpg,kv,atlas
+source.include_exts = py,png,jpg,kv,atlas,ogg
 
 # (list) Source files to exclude (let empty to not excluding anything)
 #source.exclude_exts = spec
