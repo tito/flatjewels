@@ -21,7 +21,7 @@ Credits
 
 '''
 
-__version__ = '0.4.0'
+__version__ = '0.4.1'
 
 import json
 from os.path import exists, join
@@ -344,12 +344,13 @@ def print_time_spent(f):
         return ret
     return f2
 
+
 class Jewel(Widget):
     color = ListProperty([0, 0, 0])
     index = NumericProperty(0)
     ix = NumericProperty(0)
     iy = NumericProperty(0)
-    board = ObjectProperty()
+    board = ObjectProperty(allownone=True)
     selected = BooleanProperty(False)
     animating = BooleanProperty(False)
     anim = ObjectProperty(None, allownone=True)
@@ -398,6 +399,7 @@ class Jewel(Widget):
 
     def destroy(self, *args):
         self.board.remove_widget(self)
+        self.board = None
 
     def highlight(self):
         if self.anim_highlight:
@@ -1058,10 +1060,12 @@ class ScoreLabel(Label):
     origin = ListProperty([0, 0])
     def __init__(self, **kwargs):
         super(ScoreLabel, self).__init__(**kwargs)
-        Animation(dy=sp(50), color=(1, 1, 1, 0.), d=.5).start(self)
+        anim = Animation(dy=sp(50), opacity=0., d=.5)
+        anim.bind(on_complete=self.remove_parent)
+        anim.start(self)
 
-    def on_opacity(self, *args):
-        if self.opacity == 0 and self.parent:
+    def remove_parent(self, *args):
+        if self.parent:
             self.parent.remove_widget(self)
 
 
@@ -1100,8 +1104,6 @@ class JewelApp(App):
 
     time = NumericProperty(0)
 
-    textures = DictProperty()
-
     score_levels = ListProperty([0])
 
     gameover_graph = ObjectProperty()
@@ -1109,6 +1111,7 @@ class JewelApp(App):
     timer_hint = NumericProperty(0)
 
     def build(self):
+        self.textures = {}
         self.load_sounds()
         self.highscore_fn = join(self.user_data_dir, 'highscore.dat')
 
@@ -1132,6 +1135,17 @@ class JewelApp(App):
         Clock.schedule_interval(self.update_time, 1 / 20.)
         #Clock.schedule_interval(self._stats, 1 / 60.)
         #self._stats()
+
+        if False:
+            def debug_leaks(*args):
+                import gc; gc.collect()
+                print 'collect()', len(gc.get_objects())
+                import objgraph;
+                #print len(objgraph.by_type('PropertyStorage'))
+                objgraph.show_growth()
+                #print objgraph.typestats(objgraph.get_leaking_objects())
+                #objgraph.show_most_common_types()
+            Clock.schedule_interval(debug_leaks, 1.)
 
         # load highscores
         if not exists(self.highscore_fn):
