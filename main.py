@@ -378,7 +378,8 @@ class Jewel(Widget):
 
     def on_complete(self, *args):
         self.animating = False
-        self.board.check(self)
+        if self.board:
+            self.board.check(self)
 
     def stop(self):
         if self.anim:
@@ -398,8 +399,9 @@ class Jewel(Widget):
         self.explode(nosound=True)
 
     def destroy(self, *args):
-        self.board.remove_widget(self)
-        self.board = None
+        if self.board:
+            self.board.remove_widget(self)
+            self.board = None
 
     def highlight(self):
         if self.anim_highlight:
