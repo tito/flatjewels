@@ -398,8 +398,9 @@ class Jewel(Widget):
         self.explode(nosound=True)
 
     def destroy(self, *args):
-        self.board.remove_widget(self)
-        self.board = None
+        if self.board is not None:
+            self.board.remove_widget(self)
+            self.board = None
 
     def highlight(self):
         if self.anim_highlight:
